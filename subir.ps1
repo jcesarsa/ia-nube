@@ -8,7 +8,8 @@ param(
     [switch]$SoloSecure,          # no pasar a Community Cloud si Secure no tiene GPUs
     [int]$DiscoGb = 0,            # 0 = segun el modelo (Qwen 80 GB, FLUX.2 120 GB)
     [int]$Reintentos = 5,         # si no hay GPUs libres, reintenta cada minuto este numero de veces
-    [double]$PrecioMax = 1.00,    # si RunPod asigna una GPU mas cara, se borra al instante
+    [string]$Velocidad = "",   # vacio = preguntar
+    [double]$PrecioMax = 0,       # 0 = segun la velocidad (rapida 1,00; economica 0,50). Si toca mas cara, se borra al instante
     [switch]$SinPreguntar         # no pide escribir SI (para lanzarlo de forma automatica)
 )
 . (Join-Path $PSScriptRoot "comun.ps1")
@@ -21,10 +22,9 @@ $ImagenBase = "runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04"
 if ($Modelo -eq "flux2") {
     $Nombre = "FLUX.2 dev"
     # 48 GB: FLUX.2 dev en fp8 ocupa unos 35 GB solo el modelo.
-    $Gpus = @("NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA RTX A6000", "NVIDIA A40", "NVIDIA L40",
-        "NVIDIA RTX PRO 6000 Blackwell Server Edition", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB", "NVIDIA H100 PCIe")
+    $GpusRapida = @("NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA L40", "NVIDIA RTX A6000", "NVIDIA A40")
+    $GpusEconomica = @("NVIDIA A40", "NVIDIA RTX A6000")   # las unicas de 48 GB por debajo de 0,50 (y no siempre)
     $RamMin = 48
-    $Precio = "0,45-1,00"
     $VramAltaMb = 75000   # con 80 GB o mas, los modelos se quedan en la GPU
     $DiscoModelo = 120
     $Hf = "https://huggingface.co/Comfy-Org/Flux-2-Dev/resolve/main/split_files"
@@ -37,13 +37,12 @@ if ($Modelo -eq "flux2") {
 } else {
     $Nombre = "Qwen-Image 2512"
     # Qwen-Image en fp8 (20 GB) + codificador (9 GB): con 48 GB va holgado; con 24 GB tambien funciona.
-    # Sin GPUs caras (RTX PRO 6000, A100...): para Qwen no aportan y cuestan el doble.
-    # Ordenadas de mas barata a mas cara (aprox.).
-    # Las de 24 GB (A5000, 3090) tambien sirven: el codificador de texto se aparta de la GPU al generar.
-    $Gpus = @("NVIDIA RTX A5000", "NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090",
-        "NVIDIA L40", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA GeForce RTX 5090")
+    # Rapida: las mas potentes por debajo de 1 USD/h, de mas a menos rapida.
+    # Economica: por debajo de 0,50; las de 24 GB (A5000, 3090) sirven porque el codificador se aparta de la GPU.
+    $GpusRapida = @("NVIDIA GeForce RTX 5090", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA GeForce RTX 4090",
+        "NVIDIA L40", "NVIDIA RTX A6000")
+    $GpusEconomica = @("NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090", "NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA GeForce RTX 4090")
     $RamMin = 24
-    $Precio = "0,35-1,00"
     $VramAltaMb = 40000   # con 48 GB, modelo y codificador se quedan en la GPU
     $DiscoModelo = 80
     $Hf = "https://huggingface.co/Comfy-Org/Qwen-Image/resolve/main/split_files"
@@ -56,6 +55,21 @@ if ($Modelo -eq "flux2") {
     $Licencia = "https://huggingface.co/Qwen/Qwen-Image-2512"
 }
 $NombrePod = "$Modelo-nube"
+
+if (-not $Velocidad) {
+    if ($SinPreguntar) { $Velocidad = "economica" }
+    else {
+        Write-Host "Que GPU quieres?" -ForegroundColor Cyan
+        Write-Host "  1) Rapida     - hasta 1,00 USD/h (imagenes unas 3 veces mas rapidas)"
+        Write-Host "  2) Economica  - menos de 0,50 USD/h"
+        $r = Read-Host "Elige 1 o 2 [2]"
+        $Velocidad = if ($r -eq "1") { "rapida" } else { "economica" }
+    }
+}
+if (@("rapida", "economica") -notcontains $Velocidad) { throw "-Velocidad debe ser rapida o economica" }
+if ($Velocidad -eq "rapida") { $Gpus = $GpusRapida; if ($PrecioMax -le 0) { $PrecioMax = 1.00 } }
+else { $Gpus = $GpusEconomica; if ($PrecioMax -le 0) { $PrecioMax = 0.50 } }
+$Precio = "hasta $PrecioMax"
 if ($DiscoGb -le 0) { $DiscoGb = $DiscoModelo }
 
 Write-Host "`n=== $Nombre en la nube: subir ===`n" -ForegroundColor Cyan
@@ -167,7 +181,7 @@ $nubes = if ($Comunidad) { @("COMMUNITY") } elseif ($SoloSecure) { @("SECURE") }
 Write-Host "`nVoy a crear una instancia de pago en RunPod para $($Nombre):" -ForegroundColor Cyan
 Write-Host "  GPU (la primera libre): $($Gpus -join ', ')"
 Write-Host "  Nube: $($nubes -join ', si no hay GPUs: ')   Disco temporal: $DiscoGb GB (se borra con la instancia)   Sin volumen persistente"
-Write-Host "  Coste aproximado: $Precio USD por hora (maximo $PrecioMax; si toca mas cara se borra al instante) segun la GPU que toque (veras el precio exacto al crearla)"
+Write-Host "  Modo $($Velocidad): $Precio USD por hora (si toca mas cara se borra al instante; veras el precio exacto al crearla)"
 Write-Host "  Se borrara sola a las $MaxHoras h, o tras $InactividadMin min sin generar."
 $ok = if ($SinPreguntar) { "SI" } else { Read-Host "Escribe SI para crearla" }
 if ($ok -ne "SI") { Write-Host "Cancelado. No se ha creado nada."; exit 0 }
@@ -195,26 +209,33 @@ $cuerpo = @{
 $pod = $null
 for ($intento = 0; $intento -le $Reintentos -and -not $pod; $intento++) {
     if ($intento -gt 0) {
-        Write-Host "  Ninguna GPU libre. Reintento $intento de $Reintentos dentro de 60 s (Ctrl+C para cancelar)..." -ForegroundColor Yellow
+        Write-Host "  Ninguna GPU libre a ese precio. Reintento $intento de $Reintentos dentro de 60 s (Ctrl+C para cancelar)..." -ForegroundColor Yellow
         Start-Sleep 60
     }
     foreach ($n in $nubes) {
         $cuerpo.cloudType = $n
-        Write-Host "Creando la instancia en $n Cloud..."
-        try { $pod = Invoke-RunPod POST "/pods" $cuerpo; break }
-        catch {
-            $msg = $_.ErrorDetails.Message
-            if ($msg -match "no instances currently available") { Write-Host "  No hay GPUs libres en $n Cloud."; continue }
-            throw "RunPod no creo la instancia (codigo $(Get-Estado $_)): $msg"
+        $cuerpo.gpuTypeIds = $Gpus
+        # Si RunPod asigna una GPU por encima del precio maximo, se borra y se prueba sin ella en esa nube.
+        while (-not $pod -and @($cuerpo.gpuTypeIds).Count -gt 0) {
+            Write-Host "Creando la instancia en $n Cloud..."
+            try { $p = Invoke-RunPod POST "/pods" $cuerpo }
+            catch {
+                $msg = $_.ErrorDetails.Message
+                if ($msg -match "no instances currently available") { Write-Host "  No hay GPUs libres en $n Cloud."; break }
+                throw "RunPod no creo la instancia (codigo $(Get-Estado $_)): $msg"
+            }
+            if ([double]$p.costPerHr -le $PrecioMax) { $pod = $p; break }
+            $gpuCara = $p.machine.gpuTypeId
+            if (-not $gpuCara) { $gpuCara = $p.gpu.id }
+            Write-Host ("  Toco {0} a {1} USD/h, mas que el maximo ({2}). La borro y pruebo otra." -f $gpuCara, $p.costPerHr, $PrecioMax) -ForegroundColor Yellow
+            Invoke-RunPod DELETE "/pods/$($p.id)" | Out-Null
+            if (-not $gpuCara) { break }
+            $cuerpo.gpuTypeIds = @(@($cuerpo.gpuTypeIds) | Where-Object { $_ -ne $gpuCara })
         }
+        if ($pod) { break }
     }
 }
-if (-not $pod) { throw "RunPod no tiene ahora ninguna de esas GPUs libres. Prueba mas tarde; no se ha creado nada." }
-if ([double]$pod.costPerHr -gt $PrecioMax) {
-    Write-Host ("  RunPod asigno una GPU de {0} USD/h, por encima del maximo de {1}. La borro ya." -f $pod.costPerHr, $PrecioMax) -ForegroundColor Red
-    Invoke-RunPod DELETE "/pods/$($pod.id)" | Out-Null
-    throw "Instancia descartada por precio. Prueba en unos minutos o sube el limite con -PrecioMax."
-}
+if (-not $pod) { throw "RunPod no tiene ahora GPUs libres por debajo de $PrecioMax USD/h. Prueba mas tarde u otro modo; no se ha quedado nada creado." }
 $Url = "https://$($pod.id)-7860.proxy.runpod.net"
 @{ id = $pod.id; modelo = $Modelo; token = $AppToken; base = $Url; url = "$Url/?t=$AppToken"; creada = (Get-Date).ToString("s") } |
     ConvertTo-Json | Set-Content $FichPod -Encoding UTF8

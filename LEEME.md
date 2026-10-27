@@ -29,8 +29,15 @@ Solo puede haber una máquina a la vez. Si ejecutas Subir con una ya en marcha, 
 - Usa la imagen `ghcr.io/jcesarsa/ia-nube-comfyui` (ComfyUI ya instalado; se construye sola en GitHub al cambiar el repositorio). Si no está disponible, instala todo al arrancar.
 - Antes de avisar de que está lista, carga el modelo en la GPU: la primera imagen ya sale rápida.
 - Si Secure Cloud no tiene GPUs, pasa sola a Community Cloud (`-SoloSecure` para evitarlo, `-Comunidad` para ir directo).
-- Si RunPod asigna una GPU de más de 1 USD/h, la borra al instante (`-PrecioMax 1.5` para subir el límite).
+- Al lanzarlo pregunta el modo: **rápida** (GPUs potentes, hasta 1 USD/h) o **económica** (menos de 0,50 USD/h). También con `-Velocidad rapida` o `-Velocidad economica`.
+- Si RunPod asigna una GPU por encima de ese precio, la borra al instante y prueba otra (`-PrecioMax 1.5` para cambiar el límite).
+- FLUX.2 necesita 48 GB: en modo económico casi nunca hay GPUs por debajo de 0,50; usa el rápido.
 - Qwen: escribe el prompt en inglés y el texto que deba salir en la imagen, entre comillas.
+
+## La app
+- Cada imagen tiene botones para **borrarla** o usarla como **referencia**; arriba, **Borrar todas**.
+- Referencia en Qwen: la nueva imagen parte de ella; la barra «Cuánto cambiar» va del 10 % (casi igual) al 100 % (la ignora).
+- Referencia en FLUX.2: hasta 4 imágenes que el modelo tiene en cuenta (personas, objetos, estilo).
 
 ## Opciones
 - Modelos: FLUX.2 dev fp8 (unos 54 GB de descarga, GPU de 48 GB) y Qwen-Image 2512 fp8 + Lightning 4 pasos (unos 31 GB, GPU de 24-48 GB).

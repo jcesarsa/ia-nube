@@ -1,5 +1,5 @@
 """App web de FLUX.2 / Qwen-Image en la nube. Habla con ComfyUI en 127.0.0.1:8188 y solo deja pasar a quien tenga el token."""
-import io, os, random, subprocess, time, zipfile
+import io, os, random, shutil, subprocess, time, zipfile
 from pathlib import Path
 import aiohttp
 from aiohttp import web
@@ -8,6 +8,7 @@ COMFY = "http://127.0.0.1:8188"
 TOKEN = os.environ.get("APP_TOKEN", "")
 AQUI = Path(__file__).parent
 SALIDAS = Path("/opt/salidas")
+ENTRADAS = Path("/opt/ComfyUI/input")
 MODELOS = Path("/opt/ComfyUI/models")
 MODELO = os.environ.get("MODELO", "flux2")
 # Nombre de fichero por carpeta de ComfyUI, sacado de MODELOS = "carpeta|url;carpeta|url;..."
@@ -17,7 +18,7 @@ NODOS = {
               "VAEEncode", "ReferenceLatent", "FluxGuidance", "BasicGuider", "KSamplerSelect", "Flux2Scheduler",
               "RandomNoise", "EmptyFlux2LatentImage", "SamplerCustomAdvanced", "VAEDecode", "SaveImage"],
     "qwen": ["UNETLoader", "LoraLoaderModelOnly", "CLIPLoader", "VAELoader", "ModelSamplingAuraFlow", "CLIPTextEncode",
-             "EmptySD3LatentImage", "KSampler", "VAEDecode", "SaveImage"],
+             "EmptySD3LatentImage", "KSampler", "VAEDecode", "SaveImage", "LoadImage", "ImageScale", "VAEEncode"],
 }[MODELO]
 info_nodos = {}
 
@@ -112,10 +113,22 @@ def flujo_qwen(p):
         "5": completar("CLIPTextEncode", {"text": p.get("prompt", ""), "clip": ["2", 0]}),
         "6": completar("CLIPTextEncode", {"text": p.get("negativo", ""), "clip": ["2", 0]}),
         "7": completar("EmptySD3LatentImage", {"width": w, "height": h, "batch_size": 1}),
+    })
+    # Con referencia: se parte de esa imagen (recortada al tamaño elegido) en vez de ruido puro.
+    # «fuerza» = cuánto se aleja de ella (0,2 casi igual; 1 la ignora).
+    latente, denoise = ["7", 0], 1.0
+    refs = p.get("refs", [])
+    if refs:
+        g["r1"] = completar("LoadImage", {"image": refs[0]})
+        g["r2"] = completar("ImageScale", {"image": ["r1", 0], "upscale_method": "lanczos", "width": w, "height": h,
+                                           "crop": "center"})
+        g["r3"] = completar("VAEEncode", {"pixels": ["r2", 0], "vae": ["3", 0]})
+        latente, denoise = ["r3", 0], min(1.0, max(0.05, float(p.get("fuerza", 0.6))))
+    g.update({
         "8": completar("KSampler", {"model": ["4", 0], "seed": seed, "steps": int(p.get("steps", 4 if rapido else 30)),
                                     "cfg": 1.0 if rapido else float(p.get("guidance", 2.5)), "sampler_name": "euler",
                                     "scheduler": "simple", "positive": ["5", 0], "negative": ["6", 0],
-                                    "latent_image": ["7", 0], "denoise": 1.0}),
+                                    "latent_image": latente, "denoise": denoise}),
         "9": completar("VAEDecode", {"samples": ["8", 0], "vae": ["3", 0]}),
         "10": completar("SaveImage", {"images": ["9", 0], "filename_prefix": "qwen"}),
     })
@@ -206,6 +219,31 @@ async def imagen(req):
     return web.FileResponse(f)
 
 
+async def borrar_imagen(req):
+    f = SALIDAS / Path(req.match_info["nombre"]).name
+    if f.is_file():
+        f.unlink()
+    return web.json_response({"ok": True})
+
+
+async def borrar_todas(req):
+    n = 0
+    for f in SALIDAS.glob("*.png") if SALIDAS.exists() else []:
+        f.unlink()
+        n += 1
+    return web.json_response({"borradas": n})
+
+
+async def usar_como_referencia(req):
+    """Copia una imagen generada a la carpeta de entrada de ComfyUI para usarla de referencia."""
+    f = SALIDAS / Path(req.match_info["nombre"]).name
+    if not f.is_file():
+        raise web.HTTPNotFound()
+    ENTRADAS.mkdir(parents=True, exist_ok=True)
+    shutil.copy(f, ENTRADAS / f.name)
+    return web.json_response({"name": f.name})
+
+
 async def lista(req):
     fs = sorted(SALIDAS.glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True) if SALIDAS.exists() else []
     return web.json_response([f.name for f in fs])
@@ -265,7 +303,9 @@ def main():
     app.add_routes([
         web.get("/", index), web.get("/health", health), web.get("/api/estado", estado),
         web.post("/api/generar", generar), web.post("/api/subir", subir), web.get("/api/trabajo/{id}", trabajo),
-        web.get("/api/imagen/{nombre}", imagen), web.get("/api/lista", lista),
+        web.get("/api/imagen/{nombre}", imagen), web.delete("/api/imagen/{nombre}", borrar_imagen),
+        web.post("/api/borrar-todas", borrar_todas), web.post("/api/referencia/{nombre}", usar_como_referencia),
+        web.get("/api/lista", lista),
         web.get("/api/imagenes.zip", zip_salidas), web.post("/api/destruir", destruir),
         web.get("/api/registro", registro),
     ])

@@ -27,7 +27,16 @@
   #refs img { width:64px; height:64px; object-fit:cover; border-radius:6px; cursor:pointer; border:1px solid var(--borde); }
   #estado { margin-top:10px; color:var(--suave); min-height:1.4em; }
   #galeria { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:10px; }
-  #galeria a img { width:100%; border-radius:8px; display:block; }
+  .tarjeta { position:relative; }
+  .tarjeta img { width:100%; border-radius:8px; display:block; }
+  .tarjeta .botones { position:absolute; top:6px; right:6px; display:flex; gap:4px; opacity:0; transition:opacity .15s; }
+  .tarjeta:hover .botones, .tarjeta:focus-within .botones { opacity:1; }
+  @media (hover:none) { .tarjeta .botones { opacity:1; } }
+  .tarjeta .botones button { padding:4px 8px; font-size:13px; background:rgba(20,22,26,.85); color:var(--texto); border:1px solid var(--borde); }
+  .tarjeta .botones button.borrar:hover { background:var(--peligro); color:#0b0d12; }
+  #refs { align-items:center; }
+  #fuerzaCaja { margin-top:8px; }
+  #fuerza { padding:0; }
   .acciones { display:flex; gap:8px; flex-wrap:wrap; }
 </style>
 </head>
@@ -36,6 +45,7 @@
   <div><h1 id="titulo">En la nube</h1><div id="info">Cargando…</div></div>
   <div class="acciones">
     <a href="/api/imagenes.zip"><button class="sec">Descargar todas (zip)</button></a>
+    <button class="sec" id="borrarTodas">Borrar todas</button>
     <button class="peligro" id="destruir">Apagar y borrar la instancia</button>
   </div>
 </header>
@@ -62,10 +72,14 @@
       <div><label for="guia" id="lguia">Guía</label><input id="guia" type="number" min="1" max="10" step="0.5" value="4"></div>
       <div><label for="semilla">Semilla</label><input id="semilla" placeholder="al azar"></div>
     </div>
-    <div id="soloFlux">
-      <label>Imágenes de referencia (opcional, hasta 4; clic para quitar)</label>
+    <div id="refCaja">
+      <label id="lref">Imágenes de referencia (opcional, hasta 4; clic para quitar)</label>
       <input id="fichero" type="file" accept="image/*" multiple>
       <div id="refs"></div>
+      <div id="fuerzaCaja" hidden>
+        <label for="fuerza">Cuánto cambiar la referencia: <span id="fuerzaTxt">60 %</span></label>
+        <input id="fuerza" type="range" min="10" max="100" step="5" value="60">
+      </div>
     </div>
     <button id="generar">Generar</button>
     <div id="estado"></div>
@@ -76,6 +90,7 @@
 const $ = s => document.querySelector(s);
 const refs = [];
 let modelo = null;
+let maxRefs = 4;
 
 const TAMAÑOS = {
   flux2: [['1024x1024','Cuadrada 1024×1024'],['1216x832','Horizontal 1216×832'],['832x1216','Vertical 832×1216'],
@@ -91,7 +106,8 @@ function prepararModelo(m, hayRapido) {
   document.title = (qwen ? 'Qwen-Image' : 'FLUX.2') + ' en la nube';
   $('#tam').innerHTML = TAMAÑOS[m].map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
   $('#soloQwen').hidden = !qwen;
-  $('#soloFlux').hidden = qwen;
+  maxRefs = qwen ? 1 : 4;
+  if (qwen) $('#lref').textContent = 'Imagen de referencia (opcional): la nueva imagen parte de ella. Clic para quitar.';
   if (qwen) $('#prompt').placeholder = 'Mejor en inglés. El texto que deba salir escrito, entre comillas: a sign that says "Hola Julio"';
   $('#lguia').textContent = qwen ? 'CFG' : 'Guía';
   $('#guia').value = qwen ? 2.5 : 4;
@@ -113,11 +129,40 @@ async function info() {
 }
 
 function añadir(nombre, arriba) {
-  const a = document.createElement('a');
-  a.href = '/api/imagen/' + encodeURIComponent(nombre); a.target = '_blank'; a.download = nombre;
-  a.innerHTML = `<img loading="lazy" src="${a.href}" alt="">`;
-  arriba ? $('#galeria').prepend(a) : $('#galeria').append(a);
+  const url = '/api/imagen/' + encodeURIComponent(nombre);
+  const div = document.createElement('div');
+  div.className = 'tarjeta';
+  div.innerHTML = `<a href="${url}" target="_blank" download="${nombre}"><img loading="lazy" src="${url}" alt=""></a>
+    <div class="botones"><button class="usar" title="Usar como referencia">Referencia</button><button class="borrar" title="Borrar">Borrar</button></div>`;
+  div.querySelector('.borrar').onclick = async () => {
+    if (!confirm('¿Borrar esta imagen? No se puede recuperar.')) return;
+    await fetch(url, {method:'DELETE'});
+    div.remove();
+  };
+  div.querySelector('.usar').onclick = async () => {
+    const d = await (await fetch('/api/referencia/' + encodeURIComponent(nombre), {method:'POST'})).json();
+    ponerRef(d.name, url);
+  };
+  arriba ? $('#galeria').prepend(div) : $('#galeria').append(div);
 }
+
+function ponerRef(nombre, src) {
+  if (refs.length >= maxRefs) { refs.length = 0; $('#refs').innerHTML = ''; }
+  refs.push(nombre);
+  const img = document.createElement('img'); img.src = src; img.title = 'Quitar';
+  img.onclick = () => { refs.splice(refs.indexOf(nombre), 1); img.remove(); actualizarFuerza(); };
+  $('#refs').append(img);
+  actualizarFuerza();
+}
+
+function actualizarFuerza() { $('#fuerzaCaja').hidden = !(modelo === 'qwen' && refs.length); }
+$('#fuerza').oninput = e => { $('#fuerzaTxt').textContent = e.target.value + ' %'; };
+
+$('#borrarTodas').onclick = async () => {
+  if (!confirm('¿Borrar TODAS las imágenes generadas? Descárgalas antes si las quieres.')) return;
+  await fetch('/api/borrar-todas', {method:'POST'});
+  $('#galeria').innerHTML = '';
+};
 
 async function cargarGaleria() {
   (await (await fetch('/api/lista')).json()).forEach(n => añadir(n, false));
@@ -125,13 +170,9 @@ async function cargarGaleria() {
 
 $('#fichero').onchange = async e => {
   for (const f of e.target.files) {
-    if (refs.length >= 4) break;
     const fd = new FormData(); fd.append('image', f);
     const d = await (await fetch('/api/subir', {method:'POST', body:fd})).json();
-    refs.push(d.name);
-    const img = document.createElement('img'); img.src = URL.createObjectURL(f); img.title = 'Quitar';
-    img.onclick = () => { refs.splice(refs.indexOf(d.name), 1); img.remove(); };
-    $('#refs').append(img);
+    ponerRef(d.name, URL.createObjectURL(f));
   }
   e.target.value = '';
 };
@@ -145,7 +186,7 @@ $('#generar').onclick = async () => {
   try {
     const r = await fetch('/api/generar', {method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({prompt, width, height, steps:+$('#pasos').value, guidance:+$('#guia').value, seed:$('#semilla').value, refs,
-        negativo:$('#negativo').value, rapido:$('#rapido').checked})});
+        negativo:$('#negativo').value, rapido:$('#rapido').checked, fuerza:+$('#fuerza').value / 100})});
     const d = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(d.error));
     while (true) {
