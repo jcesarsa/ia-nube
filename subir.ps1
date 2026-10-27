@@ -6,7 +6,8 @@ param(
     [int]$InactividadMin = 60,    # ...o tras estos minutos sin generar nada
     [switch]$Comunidad,           # solo Community Cloud (por defecto: Secure y, si no hay GPUs, Community)
     [switch]$SoloSecure,          # no pasar a Community Cloud si Secure no tiene GPUs
-    [int]$DiscoGb = 120,
+    [int]$DiscoGb = 0,            # 0 = segun el modelo (Qwen 80 GB, FLUX.2 120 GB)
+    [int]$Reintentos = 5,         # si no hay GPUs libres, reintenta cada minuto este numero de veces
     [double]$PrecioMax = 1.00,    # si RunPod asigna una GPU mas cara, se borra al instante
     [switch]$SinPreguntar         # no pide escribir SI (para lanzarlo de forma automatica)
 )
@@ -25,6 +26,7 @@ if ($Modelo -eq "flux2") {
     $RamMin = 48
     $Precio = "0,45-1,00"
     $VramAltaMb = 75000   # con 80 GB o mas, los modelos se quedan en la GPU
+    $DiscoModelo = 120
     $Hf = "https://huggingface.co/Comfy-Org/Flux-2-Dev/resolve/main/split_files"
     $Ficheros = [ordered]@{
         diffusion_models = @("$Hf/diffusion_models/flux2_dev_fp8mixed.safetensors")
@@ -37,11 +39,13 @@ if ($Modelo -eq "flux2") {
     # Qwen-Image en fp8 (20 GB) + codificador (9 GB): con 48 GB va holgado; con 24 GB tambien funciona.
     # Sin GPUs caras (RTX PRO 6000, A100...): para Qwen no aportan y cuestan el doble.
     # Ordenadas de mas barata a mas cara (aprox.).
-    $Gpus = @("NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA GeForce RTX 4090", "NVIDIA L40", "NVIDIA L40S",
-        "NVIDIA RTX 6000 Ada Generation", "NVIDIA GeForce RTX 5090")
+    # Las de 24 GB (A5000, 3090) tambien sirven: el codificador de texto se aparta de la GPU al generar.
+    $Gpus = @("NVIDIA RTX A5000", "NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090",
+        "NVIDIA L40", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA GeForce RTX 5090")
     $RamMin = 24
     $Precio = "0,35-1,00"
     $VramAltaMb = 40000   # con 48 GB, modelo y codificador se quedan en la GPU
+    $DiscoModelo = 80
     $Hf = "https://huggingface.co/Comfy-Org/Qwen-Image/resolve/main/split_files"
     $Ficheros = [ordered]@{
         diffusion_models = @("$Hf/diffusion_models/qwen_image_2512_fp8_e4m3fn.safetensors", "$Hf/diffusion_models/qwen_image_fp8_e4m3fn.safetensors")
@@ -52,6 +56,7 @@ if ($Modelo -eq "flux2") {
     $Licencia = "https://huggingface.co/Qwen/Qwen-Image-2512"
 }
 $NombrePod = "$Modelo-nube"
+if ($DiscoGb -le 0) { $DiscoGb = $DiscoModelo }
 
 Write-Host "`n=== $Nombre en la nube: subir ===`n" -ForegroundColor Cyan
 
@@ -174,7 +179,6 @@ $cuerpo = @{
     gpuTypeIds = $Gpus
     gpuTypePriority = "custom"
     gpuCount = 1
-    allowedCudaVersions = @("12.8", "12.9", "13.0")
     containerDiskInGb = $DiscoGb
     volumeInGb = 0
     minRAMPerGPU = $RamMin
@@ -189,19 +193,23 @@ $cuerpo = @{
 }
 
 $pod = $null
-foreach ($n in $nubes) {
-    $cuerpo.cloudType = $n
-    Write-Host "Creando la instancia en $n Cloud..."
-    try { $pod = Invoke-RunPod POST "/pods" $cuerpo; break }
-    catch {
-        $msg = $_.ErrorDetails.Message
-        if ($msg -match "no instances currently available" -and $n -ne $nubes[-1]) {
-            Write-Host "  No hay GPUs libres en $n Cloud; pruebo en la siguiente." -ForegroundColor Yellow
-            continue
+for ($intento = 0; $intento -le $Reintentos -and -not $pod; $intento++) {
+    if ($intento -gt 0) {
+        Write-Host "  Ninguna GPU libre. Reintento $intento de $Reintentos dentro de 60 s (Ctrl+C para cancelar)..." -ForegroundColor Yellow
+        Start-Sleep 60
+    }
+    foreach ($n in $nubes) {
+        $cuerpo.cloudType = $n
+        Write-Host "Creando la instancia en $n Cloud..."
+        try { $pod = Invoke-RunPod POST "/pods" $cuerpo; break }
+        catch {
+            $msg = $_.ErrorDetails.Message
+            if ($msg -match "no instances currently available") { Write-Host "  No hay GPUs libres en $n Cloud."; continue }
+            throw "RunPod no creo la instancia (codigo $(Get-Estado $_)): $msg"
         }
-        throw "RunPod no creo la instancia (codigo $(Get-Estado $_)): $msg`nSi dice que no hay GPUs libres, prueba otra vez en unos minutos."
     }
 }
+if (-not $pod) { throw "RunPod no tiene ahora ninguna de esas GPUs libres. Prueba mas tarde; no se ha creado nada." }
 if ([double]$pod.costPerHr -gt $PrecioMax) {
     Write-Host ("  RunPod asigno una GPU de {0} USD/h, por encima del maximo de {1}. La borro ya." -f $pod.costPerHr, $PrecioMax) -ForegroundColor Red
     Invoke-RunPod DELETE "/pods/$($pod.id)" | Out-Null

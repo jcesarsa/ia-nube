@@ -58,7 +58,7 @@ fi
 [ $PREPARADA = 0 ] && { pip install -q -r $C/requirements.txt || fallo "no se pudieron instalar las dependencias de ComfyUI"; }
 # Comprobar que PyTorch ve la GPU antes de seguir (driver del servidor demasiado antiguo, GPU no soportada...).
 python3 -c "import torch; print('torch', torch.__version__, 'cuda', torch.version.cuda); assert torch.cuda.is_available(), 'CUDA no disponible'; print('GPU', torch.cuda.get_device_name(0)); torch.zeros(1).cuda()" \
-  || fallo "PyTorch no puede usar la GPU de este servidor (mira el registro)"
+  || { bash $R/eliminar.sh "PyTorch no puede usar la GPU de este servidor"; fallo "PyTorch no puede usar la GPU de este servidor (instancia borrada)"; }
 
 wait $DL || fallo "falló la descarga de modelos (revisa el token de Hugging Face y la licencia)"
 rm -f /opt/descargas.txt
