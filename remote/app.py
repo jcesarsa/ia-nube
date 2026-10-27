@@ -49,7 +49,8 @@ async def auth(req, handler):
 
 def progreso_descarga():
     total = int(leer("/opt/bytes_total", "0") or 0)
-    hecho = sum(f.stat().st_size for d in ARCH
+    # st_blocks cuenta solo lo escrito (aria2 deja ficheros dispersos del tamaño final)
+    hecho = sum(f.stat().st_blocks * 512 for d in ARCH
                 for f in (MODELOS / d).glob("*") if f.is_file()) if MODELOS.exists() else 0
     return min(99, round(100 * hecho / total)) if total else None
 
