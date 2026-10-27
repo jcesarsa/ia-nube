@@ -25,6 +25,12 @@ Solo puede haber una máquina a la vez. Si ejecutas Subir con una ya en marcha, 
 - Solo se publica la app (puerto 7860), protegida con un token aleatorio que va en el enlace. ComfyUI no es accesible desde fuera.
 - No se crea ningún disco persistente: todo se pierde al borrar la máquina, así que descarga las imágenes antes (Bajar.bat lo hace).
 
+## Para que vaya rápido y barato
+- Usa la imagen `ghcr.io/jcesarsa/ia-nube-comfyui` (ComfyUI ya instalado; se construye sola en GitHub al cambiar el repositorio). Si no está disponible, instala todo al arrancar.
+- Antes de avisar de que está lista, carga el modelo en la GPU: la primera imagen ya sale rápida.
+- Si Secure Cloud no tiene GPUs, pasa sola a Community Cloud (`-SoloSecure` para evitarlo, `-Comunidad` para ir directo).
+- Si RunPod asigna una GPU de más de 1 USD/h, la borra al instante (`-PrecioMax 1.5` para subir el límite).
+- Qwen: escribe el prompt en inglés y el texto que deba salir en la imagen, entre comillas.
+
 ## Opciones
-- `-Comunidad`: usa Community Cloud (algo más barata, menos fiable).
 - Modelos: FLUX.2 dev fp8 (unos 54 GB de descarga, GPU de 48 GB) y Qwen-Image 2512 fp8 + Lightning 4 pasos (unos 31 GB, GPU de 24-48 GB).
