@@ -1,0 +1,5 @@
+pod.json
+imagenes/
+*.log
+prueba_*.png
+diag_*.png

@@ -1,0 +1,28 @@
+name: Imagen Docker
+on:
+  push:
+    branches: [main]
+    paths: ["docker/**", "remote/**", ".github/workflows/imagen.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  construir:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Liberar disco (la imagen base de PyTorch es grande)
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Construir y publicar
+        run: |
+          IMG=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ia-nube-comfyui
+          docker build -f docker/Dockerfile -t $IMG:latest -t $IMG:${GITHUB_SHA::7} .
+          docker push --all-tags $IMG
