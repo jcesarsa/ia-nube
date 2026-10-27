@@ -35,6 +35,14 @@
   .tarjeta .botones button { padding:4px 8px; font-size:13px; background:rgba(20,22,26,.85); color:var(--texto); border:1px solid var(--borde); }
   .tarjeta .botones button.borrar:hover { background:var(--peligro); color:#0b0d12; }
   #refs { align-items:center; }
+  .tarjeta > img { cursor:zoom-in; }
+  #visor { position:fixed; inset:0; background:rgba(0,0,0,.88); display:flex; align-items:center; justify-content:center; z-index:10; padding:16px; }
+  #visor[hidden] { display:none; }
+  #visor img { max-width:100%; max-height:calc(100vh - 90px); border-radius:8px; box-shadow:0 8px 40px rgba(0,0,0,.6); }
+  #visor .barra { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  #visor .nav { position:fixed; top:50%; transform:translateY(-50%); font-size:28px; padding:6px 14px; background:rgba(20,22,26,.8); color:var(--texto); border:1px solid var(--borde); }
+  #visor .ant { left:12px; } #visor .sig { right:12px; }
+  #visor .cerrar { position:fixed; top:12px; right:12px; background:rgba(20,22,26,.8); color:var(--texto); border:1px solid var(--borde); }
   #fuerzaCaja { margin-top:8px; }
   #fuerza { padding:0; }
   .acciones { display:flex; gap:8px; flex-wrap:wrap; }
@@ -86,6 +94,17 @@
   </section>
   <section class="panel"><div id="galeria"></div></section>
 </main>
+<div id="visor" hidden>
+  <button class="cerrar" title="Cerrar (Esc)">✕</button>
+  <button class="nav ant" title="Anterior (←)">‹</button>
+  <img alt="">
+  <button class="nav sig" title="Siguiente (→)">›</button>
+  <div class="barra">
+    <a id="visorDescargar"><button class="sec">Descargar</button></a>
+    <button class="sec" id="visorRef">Usar como referencia</button>
+    <button class="peligro" id="visorBorrar">Borrar</button>
+  </div>
+</div>
 <script>
 const $ = s => document.querySelector(s);
 const refs = [];
@@ -132,19 +151,59 @@ function añadir(nombre, arriba) {
   const url = '/api/imagen/' + encodeURIComponent(nombre);
   const div = document.createElement('div');
   div.className = 'tarjeta';
-  div.innerHTML = `<a href="${url}" target="_blank" download="${nombre}"><img loading="lazy" src="${url}" alt=""></a>
+  div.dataset.nombre = nombre;
+  div.innerHTML = `<img loading="lazy" src="${url}" alt="" title="Ver en grande">
     <div class="botones"><button class="usar" title="Usar como referencia">Referencia</button><button class="borrar" title="Borrar">Borrar</button></div>`;
-  div.querySelector('.borrar').onclick = async () => {
-    if (!confirm('¿Borrar esta imagen? No se puede recuperar.')) return;
-    await fetch(url, {method:'DELETE'});
-    div.remove();
-  };
-  div.querySelector('.usar').onclick = async () => {
-    const d = await (await fetch('/api/referencia/' + encodeURIComponent(nombre), {method:'POST'})).json();
-    ponerRef(d.name, url);
-  };
+  div.querySelector('img').onclick = () => abrirVisor(div);
+  div.querySelector('.borrar').onclick = () => borrarTarjeta(div);
+  div.querySelector('.usar').onclick = () => usarTarjeta(div);
   arriba ? $('#galeria').prepend(div) : $('#galeria').append(div);
 }
+
+const urlDe = div => '/api/imagen/' + encodeURIComponent(div.dataset.nombre);
+
+async function borrarTarjeta(div) {
+  if (!confirm('¿Borrar esta imagen? No se puede recuperar.')) return false;
+  await fetch(urlDe(div), {method:'DELETE'});
+  div.remove();
+  return true;
+}
+
+async function usarTarjeta(div) {
+  const d = await (await fetch('/api/referencia/' + encodeURIComponent(div.dataset.nombre), {method:'POST'})).json();
+  ponerRef(d.name, urlDe(div));
+}
+
+// Visor a pantalla completa: clic en una imagen; flechas para moverse, Esc para cerrar.
+let visorActual = null;
+function abrirVisor(div) {
+  visorActual = div;
+  $('#visor img').src = urlDe(div);
+  $('#visorDescargar').href = urlDe(div);
+  $('#visorDescargar').download = div.dataset.nombre;
+  $('#visor').hidden = false;
+}
+function cerrarVisor() { $('#visor').hidden = true; visorActual = null; }
+function moverVisor(paso) {
+  if (!visorActual) return;
+  const otra = paso > 0 ? visorActual.nextElementSibling : visorActual.previousElementSibling;
+  if (otra) abrirVisor(otra);
+}
+$('#visor .cerrar').onclick = cerrarVisor;
+$('#visor .ant').onclick = () => moverVisor(-1);
+$('#visor .sig').onclick = () => moverVisor(1);
+$('#visor').onclick = e => { if (e.target.id === 'visor') cerrarVisor(); };
+$('#visorRef').onclick = async () => { await usarTarjeta(visorActual); cerrarVisor(); };
+$('#visorBorrar').onclick = async () => {
+  const div = visorActual, siguiente = div.nextElementSibling || div.previousElementSibling;
+  if (await borrarTarjeta(div)) siguiente ? abrirVisor(siguiente) : cerrarVisor();
+};
+document.addEventListener('keydown', e => {
+  if ($('#visor').hidden) return;
+  if (e.key === 'Escape') cerrarVisor();
+  if (e.key === 'ArrowLeft') moverVisor(-1);
+  if (e.key === 'ArrowRight') moverVisor(1);
+});
 
 function ponerRef(nombre, src) {
   if (refs.length >= maxRefs) { refs.length = 0; $('#refs').innerHTML = ''; }
