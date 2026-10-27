@@ -26,7 +26,7 @@ nohup bash $R/vigilante.sh > /opt/vigilante.log 2>&1 &
 nohup python3 $R/app.py > /opt/app.log 2>&1 &
 
 C=/opt/ComfyUI
-fase "Descargando modelos e instalando ComfyUI"
+if [ $PREPARADA = 1 ]; then fase "Descargando modelos"; else fase "Descargando modelos e instalando ComfyUI"; fi
 # Se resuelve la URL firmada del CDN con el token (curl no reenvía el token a otro dominio)
 # y aria2 descarga esa URL sin cabeceras, con muchas conexiones en paralelo.
 firmada() {
